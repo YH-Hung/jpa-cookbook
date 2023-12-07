@@ -10,6 +10,6 @@ import java.util.List;
 public class SaveJudgeRequest {
     private Integer productId;
     private String inspectDate;
-    private String judgeStage;
+    private Integer judgeStage;
     private List<JudgeChange> judges;
 }

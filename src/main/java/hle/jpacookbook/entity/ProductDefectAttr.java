@@ -20,7 +20,7 @@ public class ProductDefectAttr {
     private Integer id;
 
     @Column(name = "product_id")
-    private String productId;
+    private Integer productId;
 
     @Column(name = "inspect_date")
     private LocalDateTime inspectDate;

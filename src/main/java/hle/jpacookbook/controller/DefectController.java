@@ -35,4 +35,6 @@ public class DefectController {
         var inspect = new InspectQuery(productId, LocalDateTime.parse(inspDt));
         return defectAggregateRepository.getRecordsByInsp(inspect);
     }
+
+
 }
