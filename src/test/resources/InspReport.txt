@@ -1,0 +1,19 @@
+Inspection Report
+    Inspection: 956-124-7X
+    Shape
+        Bottom Left Corner  12.986343 mm, 78.38263 mm
+        Top Right Corner    342.943873 mm, 353.39272 mm
+    Orientation: 0 degree
+
+    DiePoint    13.2937743 mm, 14.981723 mm
+    DiePoint    45.9737122 mm, 15.000723 mm
+    DiePoint    98.3123343 mm, 19.027783 mm
+    DiePoint    120.293774 mm, 57.981723 mm
+    Dropout:
+
+Chrome Defect List:
+1   Location: 20.38623  ,32.23297 mm Size: 273   ,307    nm
+2   Location: 34.78326  ,41.22323 mm Size: 273   ,307    nm
+3   Location: 45.48937  ,47.38374 mm Size: 273   ,307    nm
+4   Location: 20.38623  ,32.23297 mm Size: 273   ,307    nm
+5   Location: 20.38623  ,32.23297 mm Size: 273   ,307    nm
