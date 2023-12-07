@@ -14,4 +14,6 @@ public interface ProductDefectRepository extends JpaRepository<ProductDefect, Pr
     Option<ProductDefect> findById_ProductIdAndId_InspectDateAndId_DefectId(Integer productId, LocalDateTime inspectDate, Integer defectId);
 
     List<ProductDefect> findById_ProductIdAndId_InspectDate(Integer productId, LocalDateTime inspectDate);
+
+    // TODO: Entity Graph
 }
