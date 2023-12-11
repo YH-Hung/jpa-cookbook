@@ -43,7 +43,7 @@ public class InspectionReport {
 
                 Matcher matcher = CORNER_PATTERN.matcher(line);
                 if (matcher.find()) {
-                    return String.format("Group 1: %s    Group 2: %s", matcher.group(1), matcher.group(2));
+                    return String.format("%s,%s", matcher.group(1), matcher.group(2));
                 }
             }
         }
