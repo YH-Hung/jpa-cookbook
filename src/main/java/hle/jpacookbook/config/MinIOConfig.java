@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.concurrent.TimeUnit;
+
 @Configuration
 public class MinIOConfig {
 
@@ -18,9 +20,17 @@ public class MinIOConfig {
 
     @Bean
     public MinioClient minioClient() {
-        return MinioClient.builder()
+        MinioClient client = MinioClient.builder()
                 .endpoint(minIOProperties.getEndpoint())
                 .credentials(minIOProperties.getAccessKey(), minIOProperties.getSecretKey())
                 .build();
+
+        client.setTimeout(
+                TimeUnit.SECONDS.toMillis(minIOProperties.getConnectTimeoutSec()),
+                TimeUnit.SECONDS.toMillis(minIOProperties.getWriteTimeoutSec()),
+                TimeUnit.SECONDS.toMillis(minIOProperties.getReadTimeoutSec())
+        );
+
+        return client;
     }
 }

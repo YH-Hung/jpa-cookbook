@@ -11,4 +11,7 @@ public class MinIOProperties {
     private String endpoint;
     private String accessKey;
     private String secretKey;
+    private Integer connectTimeoutSec;
+    private Integer writeTimeoutSec;
+    private Integer readTimeoutSec;
 }
