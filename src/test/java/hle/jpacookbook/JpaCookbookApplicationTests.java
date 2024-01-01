@@ -4,12 +4,13 @@ import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.ToxiproxyClient;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
 import hle.jpacookbook.model.report.InspectionReport;
+import hle.jpacookbook.service.ResilientMinIOClient;
 import io.minio.*;
 import io.minio.errors.*;
+import io.minio.messages.VersioningConfiguration;
 import lombok.SneakyThrows;
 import org.apache.commons.io.IOUtils;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -21,6 +22,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.ToxiproxyContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import remover.ToxicRemover;
 
 import java.io.File;
 import java.io.IOException;
@@ -30,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
+import java.util.Timer;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -77,7 +80,12 @@ class JpaCookbookApplicationTests {
     }
 
     @Autowired
+    ResilientMinIOClient resilientMinIOClient;
+
+    @Autowired
     MinioClient minioClient;
+
+    static final String BUCKET_NAME = "product";
 
     @SneakyThrows
     @BeforeAll
@@ -88,22 +96,27 @@ class JpaCookbookApplicationTests {
                 .build();
 
         boolean isBucketExist = tempMinIOClient.bucketExists(BucketExistsArgs.builder()
-                .bucket("product")
+                .bucket(BUCKET_NAME)
                 .build());
 
         if (!isBucketExist) {
             tempMinIOClient.makeBucket(
                     MakeBucketArgs.builder()
-                            .bucket("product")
+                            .bucket(BUCKET_NAME)
                             .build());
         }
+
+        tempMinIOClient.setBucketVersioning(SetBucketVersioningArgs.builder()
+                        .bucket(BUCKET_NAME)
+                        .config(new VersioningConfiguration(VersioningConfiguration.Status.ENABLED, false))
+                .build());
 
         ClassLoader loader = JpaCookbookApplicationTests.class.getClassLoader();
         File file = new File(loader.getResource("InspReport.txt").getFile());
 
         tempMinIOClient.uploadObject(UploadObjectArgs
                 .builder()
-                .bucket("product")
+                .bucket(BUCKET_NAME)
                 .object("judge/InspReport.txt")
                 .filename(file.getAbsolutePath())
                 .build());
@@ -115,11 +128,11 @@ class JpaCookbookApplicationTests {
 
     @SneakyThrows
     @Test
-    void testParseFromMinIO() {
+    void parseFromMinIO() {
         // https://www.baeldung.com/java-io-streams-closing
         InputStream is = minioClient.getObject(GetObjectArgs
                 .builder()
-                .bucket("product")
+                .bucket(BUCKET_NAME)
                 .object("judge/InspReport.txt")
                 .build());
 
@@ -132,7 +145,7 @@ class JpaCookbookApplicationTests {
 
     @SneakyThrows
     @Test
-    void testTimeoutByResponseLatency() {
+    void get_TimeoutByResponseLatency() {
         minioProxy.toxics().latency("latency", ToxicDirection.DOWNSTREAM, 20_000);
 
         assertThatExceptionOfType(SocketTimeoutException.class)
@@ -143,14 +156,70 @@ class JpaCookbookApplicationTests {
 
     @SneakyThrows
     @Test
-    void testTimeoutByLowBandwidth() {
+    void get_TimeoutByResponseLatency_RecoverByRetry() {
+        minioProxy.toxics().latency("latency", ToxicDirection.DOWNSTREAM, 20_000);
+        Timer timer = new Timer();
+        timer.schedule(new ToxicRemover(minioProxy, "latency"), 21_000);
+
+        assertThatCode(() -> {
+            InputStream is = resilientMinIOClient.getObjectWithRetry(BUCKET_NAME, "judge/InspReport.txt");
+
+            try (is) {
+                List<String> data = IOUtils.readLines(is, StandardCharsets.UTF_8);
+                var result = InspectionReport.parseTmp(data);
+                assertThat(result).isEqualTo("12.986343,78.38263");
+            }
+        }).doesNotThrowAnyException();
+    }
+
+    @SneakyThrows
+    @Test
+    void upload_TimeoutByLowBandwidth() {
         minioProxy.toxics().bandwidth("cut_downstream", ToxicDirection.DOWNSTREAM, 0);
         minioProxy.toxics().bandwidth("cut_upstream", ToxicDirection.UPSTREAM, 0);
 
-        assertThatThrownBy(() -> uploadFile("judge/InspReport_2.txt"));
+        assertThatExceptionOfType(SocketTimeoutException.class)
+                .isThrownBy(() -> uploadFile("judge/InspReport_2.txt"));
 
         minioProxy.toxics().get("cut_downstream").remove();
         minioProxy.toxics().get("cut_upstream").remove();
+    }
+
+    @SneakyThrows
+    @Test
+    void upload_VersionChange_Normal() {
+        String objPath = "judge/InspReport.txt";
+
+        var statInit = statObjByPath(objPath);
+        var response = uploadFile(objPath);
+
+        assertThat(response.versionId()).isNotEqualTo(statInit.versionId());
+    }
+
+    @SneakyThrows
+    @Test
+    void upload_VersionChange_Timeout() {
+        String objPath = "judge/InspReport_3.txt";
+
+        var initResponse = uploadFile(objPath);
+
+        minioProxy.toxics().latency("latency", ToxicDirection.DOWNSTREAM, 16_000);
+        Timer timer = new Timer();
+        timer.schedule(new ToxicRemover(minioProxy, "latency"), 16_000);
+
+        assertThatExceptionOfType(SocketTimeoutException.class)
+                .isThrownBy(() -> uploadFile(objPath));
+
+        var statAfter = statObjByPath(objPath);
+
+        assertThat(statAfter.versionId()).isNotEqualTo(initResponse.versionId());
+    }
+
+    private StatObjectResponse statObjByPath(String name) throws ErrorResponseException, InsufficientDataException, InternalException, InvalidKeyException, InvalidResponseException, IOException, NoSuchAlgorithmException, ServerException, XmlParserException {
+        return minioClient.statObject(StatObjectArgs.builder()
+                .bucket(BUCKET_NAME)
+                .object(name)
+                .build());
     }
 
     // TODO: Check version before upload, assert version not change
@@ -162,11 +231,11 @@ class JpaCookbookApplicationTests {
     // TODO: Recover bandwidth cut caused timeout by retry
 
     @SneakyThrows
-    private void uploadFile(String objPath) {
+    private ObjectWriteResponse uploadFile(String objPath) {
         ClassLoader loader = getClass().getClassLoader();
         File file = new File(loader.getResource("InspReport.txt").getFile());
 
-        minioClient.uploadObject(UploadObjectArgs
+        return minioClient.uploadObject(UploadObjectArgs
                 .builder()
                 .bucket("product")
                 .object(objPath)
