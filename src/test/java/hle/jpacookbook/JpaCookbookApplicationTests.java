@@ -10,6 +10,7 @@ import io.minio.errors.*;
 import io.minio.messages.VersioningConfiguration;
 import lombok.SneakyThrows;
 import org.apache.commons.io.IOUtils;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -215,6 +216,24 @@ class JpaCookbookApplicationTests {
         assertThat(statAfter.versionId()).isNotEqualTo(initResponse.versionId());
     }
 
+    @SneakyThrows
+    @Test
+    void upload_CheckExist_Timeout() {
+        String objPath = "judge/InspReport_4.txt";
+
+        var initResponse = uploadFile(objPath);
+
+        minioProxy.toxics().latency("latency", ToxicDirection.DOWNSTREAM, 16_000);
+        Timer timer = new Timer();
+        timer.schedule(new ToxicRemover(minioProxy, "latency"), 16_000);
+
+        resilientMinIOClient.uploadObjectWithRetry(BUCKET_NAME, objPath, getFile());
+
+        var statAfter = statObjByPath(objPath);
+
+        assertThat(statAfter.versionId()).isEqualTo(initResponse.versionId());
+    }
+
     private StatObjectResponse statObjByPath(String name) throws ErrorResponseException, InsufficientDataException, InternalException, InvalidKeyException, InvalidResponseException, IOException, NoSuchAlgorithmException, ServerException, XmlParserException {
         return minioClient.statObject(StatObjectArgs.builder()
                 .bucket(BUCKET_NAME)
@@ -222,18 +241,9 @@ class JpaCookbookApplicationTests {
                 .build());
     }
 
-    // TODO: Check version before upload, assert version not change
-
-    // TODO: Check retry when downstream latency, assert version not change
-
-    // TODO: Check time limiter under bandwidth cut
-
-    // TODO: Recover bandwidth cut caused timeout by retry
-
     @SneakyThrows
     private ObjectWriteResponse uploadFile(String objPath) {
-        ClassLoader loader = getClass().getClassLoader();
-        File file = new File(loader.getResource("InspReport.txt").getFile());
+        File file = getFile();
 
         return minioClient.uploadObject(UploadObjectArgs
                 .builder()
@@ -241,6 +251,12 @@ class JpaCookbookApplicationTests {
                 .object(objPath)
                 .filename(file.getAbsolutePath())
                 .build());
+    }
+
+    @NotNull
+    private File getFile() {
+        ClassLoader loader = getClass().getClassLoader();
+        return new File(loader.getResource("InspReport.txt").getFile());
     }
 
 }
