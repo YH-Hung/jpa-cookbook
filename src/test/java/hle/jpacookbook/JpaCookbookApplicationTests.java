@@ -6,7 +6,6 @@ import eu.rekawek.toxiproxy.model.ToxicDirection;
 import hle.jpacookbook.model.report.InspectionReport;
 import hle.jpacookbook.service.ResilientMinIOClient;
 import io.minio.*;
-import io.minio.errors.*;
 import io.minio.messages.VersioningConfiguration;
 import lombok.SneakyThrows;
 import org.apache.commons.io.IOUtils;
@@ -30,8 +29,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Timer;
 
@@ -43,17 +40,26 @@ class JpaCookbookApplicationTests {
 
     private static final Network network = Network.newNetwork();
 
+    private static final String POSTGRES_NETWORK_NAME = "postgres";
+    private static final Integer POSTGRES_SELF_PORT = 5432;
+    private static final Integer POSTGRES_PROXY_PORT = 8666;
+
+    private static final String MINIO_NETWORK_NAME = "minio";
+    private static final Integer MINIO_SELF_PORT = 9000;
+    private static final Integer MINIO_PROXY_PORT = 8667;
+
+
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(
             "postgres:15.4-alpine"
     ).withInitScript("postgres_init.sql")
             .withNetwork(network)
-            .withNetworkAliases("postgres");
+            .withNetworkAliases(POSTGRES_NETWORK_NAME);
 
     @Container
     static MinIOContainer minio = new MinIOContainer("minio/minio")
             .withNetwork(network)
-            .withNetworkAliases("minio");
+            .withNetworkAliases(MINIO_NETWORK_NAME);
 
 
     static Proxy postgresqlProxy;
@@ -66,8 +72,10 @@ class JpaCookbookApplicationTests {
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) throws IOException {
         var toxiproxyClient = new ToxiproxyClient(toxiproxy.getHost(), toxiproxy.getControlPort());
-        postgresqlProxy = toxiproxyClient.createProxy("postgresql", "0.0.0.0:8666", "postgres:5432");
-        minioProxy = toxiproxyClient.createProxy("minio", "0.0.0.0:8667", "minio:9000");
+        postgresqlProxy = toxiproxyClient.createProxy("postgresql", "0.0.0.0:%d".formatted(POSTGRES_PROXY_PORT),
+                String.format("%s:%d", POSTGRES_NETWORK_NAME, POSTGRES_SELF_PORT));
+        minioProxy = toxiproxyClient.createProxy("minio", "0.0.0.0:%d".formatted(MINIO_PROXY_PORT),
+                String.format("%s:%d", MINIO_NETWORK_NAME, MINIO_SELF_PORT));
 
         registry.add("spring.datasource.url", () -> "jdbc:postgresql://%s:%d/%s"
                 .formatted(toxiproxy.getHost(), toxiproxy.getMappedPort(8666), postgres.getDatabaseName()));
@@ -150,7 +158,15 @@ class JpaCookbookApplicationTests {
         minioProxy.toxics().latency("latency", ToxicDirection.DOWNSTREAM, 20_000);
 
         assertThatExceptionOfType(SocketTimeoutException.class)
-                .isThrownBy(() -> uploadFile("judge/InspReport_1.txt"));
+                .isThrownBy(() -> {
+                    try (InputStream is = minioClient.getObject(GetObjectArgs
+                            .builder()
+                            .bucket(BUCKET_NAME)
+                            .object("judge/InspReport.txt")
+                            .build())) {
+
+                    }
+                });
 
         minioProxy.toxics().get("latency").remove();
     }
@@ -218,7 +234,7 @@ class JpaCookbookApplicationTests {
 
     @SneakyThrows
     @Test
-    void upload_CheckExist_Timeout() {
+    void upload_CheckExistBefore_Good_Timeout() {
         String objPath = "judge/InspReport_4.txt";
 
         var initResponse = uploadFile(objPath);
@@ -227,14 +243,33 @@ class JpaCookbookApplicationTests {
         Timer timer = new Timer();
         timer.schedule(new ToxicRemover(minioProxy, "latency"), 16_000);
 
-        resilientMinIOClient.uploadObjectWithRetry(BUCKET_NAME, objPath, getFile());
+        resilientMinIOClient.uploadObjectWithRetry_Good(BUCKET_NAME, objPath, getFile());
 
         var statAfter = statObjByPath(objPath);
 
         assertThat(statAfter.versionId()).isEqualTo(initResponse.versionId());
     }
 
-    private StatObjectResponse statObjByPath(String name) throws ErrorResponseException, InsufficientDataException, InternalException, InvalidKeyException, InvalidResponseException, IOException, NoSuchAlgorithmException, ServerException, XmlParserException {
+    @SneakyThrows
+    @Test
+    void upload_CheckExistBefore_Bad_Timeout() {
+        String objPath = "judge/InspReport_4.txt";
+
+        var initResponse = uploadFile(objPath);
+
+        minioProxy.toxics().latency("latency", ToxicDirection.DOWNSTREAM, 16_000);
+        Timer timer = new Timer();
+        timer.schedule(new ToxicRemover(minioProxy, "latency"), 16_000);
+
+        resilientMinIOClient.uploadObjectWithRetry_Bad(BUCKET_NAME, objPath, getFile());
+
+        var statAfter = statObjByPath(objPath);
+
+        assertThat(statAfter.versionId()).isNotEqualTo(initResponse.versionId());
+    }
+
+    @SneakyThrows
+    private StatObjectResponse statObjByPath(String name) {
         return minioClient.statObject(StatObjectArgs.builder()
                 .bucket(BUCKET_NAME)
                 .object(name)
